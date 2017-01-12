@@ -1,0 +1,122 @@
+#!/usr/bin/python
+import os
+import sys
+import re
+import operator
+import subprocess
+
+# user_home_dir = os.getenv("HOME")
+rootdir = os.getcwd()
+xcode_symbolicate_dir = "/Applications/Xcode.app/Contents/SharedFrameworks/DVTFoundation.framework/Versions/A/Resources/symbolicatecrash"
+
+def findFiles(path):
+	app_path = None
+	crash_paths = []
+	dsym_path = None
+	files = os.listdir(path)
+	# print files
+	for file in files:
+		ext = os.path.splitext(file)[1]
+		# print file
+		if ext == ".app":
+			print "app: " + path
+			app_path = file
+		elif ext == ".dSYM":
+			dsym_path = file
+		elif ext == ".crash":
+			crash_paths.append(file)
+	if app_path == None:
+		print "No .app file found in current directory"
+	if dsym_path == None:
+		print "No dsym file found in current directory"
+	if len(crash_paths) == 0:
+		print "No .crash files found in current directory"
+	return (app_path,dsym_path,crash_paths)
+
+def symbolicate(group):
+	app = group[0]
+	dsym = group[1]
+	crashes = group[2]
+
+	for crash in crashes:
+		print "Symbolicating:  " + crash 
+		operation = [xcode_symbolicate_dir,crash,app]
+		p = subprocess.Popen(operation,env=getEnv(), stdout=subprocess.PIPE)
+		out, err = p.communicate()
+		# print os.path.basename(crash)
+		base = os.path.basename(crash)
+		split = os.path.splitext(base)
+
+		output_file = os.path.join(rootdir,base)
+		print "Output to: " + output_file
+		print out
+		if out != None:
+			with open(output_file,"w") as f:
+				f.write(out)
+		else:
+			print "error: " + str(err)
+
+
+def getEnv():
+	my_env = os.environ.copy()
+	my_env["DEVELOPER_DIR"] = "/Applications/Xcode.app/Contents/Developer"
+	
+	return my_env
+
+def findAllDSymsOnMac():
+	operation = ["mdfind","-name",".dSYM"]
+	p = subprocess.Popen(operation,env=getEnv(),stdout=subprocess.PIPE)
+	out, err = p.communicate()
+	if err:
+		print "findAllError: " + str(err)
+	return out
+
+def uuidForDSym(path):
+	operation = ["xcrun","dwarfdump","--uuid",path]
+	p = subprocess.Popen(operation,env=getEnv(),stdout=subprocess.PIPE)
+	out, err = p.communicate()
+	if err:
+		print "findAllError: " + str(err)
+	out = out.replace("UUID: ","").split(" ")[0]
+	out = out.replace("-","")
+	out = out.lower()
+	return out	
+
+def uuidForCrash(path):
+	# read file
+	uuidRegex = "(0x.*arm..  <)(.*)(>)"
+	with open(path,"r") as f:
+		text = f.read()
+		print text
+		p = re.compile(uuidRegex)
+		result = p.search(text)
+		if result != None:
+			print "found: " + str(result.group(2))
+		else:
+			print "Not found"
+
+def scanOSX():
+	group = findFiles(rootdir)
+	print group
+	print rootdir
+	files = findAllDSymsOnMac().split("\n")[:-1]
+	crash_uuid = uuidForCrash(group[2])
+	match = None
+	for file in files:
+		uuid = uuidForDSym(file) 
+		if uuid == crash_uuid:
+			match = file
+
+	if match != None:
+		print "match found"
+	else:
+		print "no match"
+
+def tryCurrentDir(rootdir):
+	group = findFiles(rootdir)
+	if group[0] != None and group[1] != None and group[2] != None:
+		symbolicate(group)
+	else:
+		print "Missing files"
+
+tryCurrentDir(rootdir)

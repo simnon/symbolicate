@@ -1,0 +1,190 @@
+#!/usr/bin/python
+import os
+import sys
+import re
+import operator
+import subprocess
+import plistlib
+
+
+rootdir = os.getcwd()
+atos_enabled = True
+
+def getEnv():
+	my_env = os.environ.copy()
+	my_env["DEVELOPER_DIR"] = "/Applications/Xcode.app/Contents/Developer"
+	return my_env
+
+def findFiles(path):
+	app_path = None
+	crash_paths = []
+	dsym_path = None
+	files = os.listdir(path)
+
+	for file in files:
+		ext = os.path.splitext(file)[1]
+		if ext == ".app":
+			app_path = file
+		elif ext == ".dSYM":
+			dsym_path = file
+		elif ext == ".crash":
+			crash_paths.append(file)
+	if app_path == None:
+		print "No .app file found in current directory"
+	if dsym_path == None:
+		print "No dsym file found in current directory"
+	if len(crash_paths) == 0:
+		print "No .crash files found in current directory"
+	return (app_path,dsym_path,crash_paths)
+
+def findFrameworks(app_path):
+	path = os.path.join(app_path,"Frameworks")
+	files = os.listdir(path)
+	frameworks = []
+	for file in files:
+		ext = os.path.splitext(file)[1]
+		if ext == ".framework":
+			file_path = os.path.join(path,file)
+			frameworks.append(file_path)
+	return frameworks
+
+def frameworkBinaryFromFramework(framework_path):
+	path_tuples = []
+	for folder, subs, files in os.walk(framework_path):
+		for file in files:
+			p1 = os.path.join(framework_path,file)
+			p2 = os.path.join(folder,file)
+			ext = os.path.splitext(file)[1]
+
+			if p1 == p2 and ext == "":
+				path_tuples.append((file,p1))
+	return path_tuples
+	
+def frameworksDictionary(frameworks):
+	frameworkBinaryDict = {}
+	exclude_keys = ["VERSION","LICENSE"]
+	for framework in frameworks:
+		for framework_name_path_tuple in frameworkBinaryFromFramework(framework):
+			if framework_name_path_tuple[0] not in exclude_keys:
+				key = framework_name_path_tuple[0].lower()
+				framework_path = framework_name_path_tuple[1]
+				framework_udid = udidsForFramework(framework_path)
+				framework_name = framework_name_path_tuple[0]
+				print key + ": " + str(framework_udid) + " : " + framework_path
+				frameworkBinaryDict[key] = (framework_path,framework_udid,framework_name)
+
+	return frameworkBinaryDict
+
+
+#parse crash
+
+def parseCrashFile(path,framework_dict):
+	print "Start dysymbolicate: " + path 
+	output = []
+	with open(path) as f:
+		lines = f.readlines()
+		for text in lines:	
+			text = findLineMatch(text,framework_dict,path)
+			output.append(text)
+
+	with open(path, "w") as f:
+		f.write("".join(output))
+
+def findLineMatch(text,framework_dict,crash_path):
+	regex = "([0-999]*(.*)\t)(0x[0-9abcdef]*) (0x[0-9abcdef]*) \+ ([0-9]*)"
+	p = re.compile(regex)
+	results = p.findall(text)
+
+	for result in results:
+		if result != None:
+			text = atosLine(text,result,framework_dict,crash_path)
+	return text 
+
+def atosLine(text,result,framework_dict,crash_path):
+	prefix = result[0]
+	name = result[1].strip().lower()
+	addr1 = result[2].strip()
+	addr2 = result[3].strip()
+
+	framework_tuple = framework_dict.get(name)
+	if framework_tuple != None:
+		if atos_enabled:
+			udids_dict = extractUdidFromCrashFileWithDict(crash_path,framework_dict)
+			archUdidTuple = udids_dict.get(name)
+			if archUdidTuple == None:
+				print "no udid extracted from " + name
+			if archUdidTuple != None:
+				framework_path = framework_tuple[0]
+				framework_arch = archUdidTuple[0]
+				framwork_binary_udid = framework_dict.get(name)[1][framework_arch]
+				crash_framework_udid = archUdidTuple[1]
+				if framwork_binary_udid == crash_framework_udid:
+					operation = ["atos", "-arch", framework_arch, "-o", framework_path, "-l", addr2, addr1]
+					p = subprocess.Popen(operation,env=getEnv(), stdout=subprocess.PIPE)
+					out, err = p.communicate()
+					if err == None:
+						return prefix + out
+				elif framwork_binary_udid != crash_framework_udid:
+					print "UDID's for " + name + " dont match"
+	return text
+
+
+# UDID validation
+
+def udidsForFramework(framework_binary_path):
+	operation = ["dwarfdump",framework_binary_path,"-u"]
+	p = subprocess.Popen(operation,env=getEnv(), stdout=subprocess.PIPE)
+	out, err = p.communicate()
+
+	udidsByArchitecture = {}
+	if err == None:
+		regex = "UUID: (.*) \((.*)\) "
+		p = re.compile(regex)
+		results = p.findall(out)
+
+		for result in results:
+			if result != None:
+				udidsByArchitecture[result[1]] = result[0].replace("-","").lower()
+	return udidsByArchitecture
+
+frameworkUdids = udidsForFramework("SyncDrive.app/Frameworks/scs.framework")
+
+
+def extractUdidFromCrashFileWithDict(crash_path,framework_dict):
+	udids_dict = {}
+	for framework_name in framework_dict.keys():
+		framework_full_name = framework_dict[framework_name][2]
+		udids_dict[framework_name] = extractUdidFromCrashFile(crash_path,framework_full_name)
+	return udids_dict
+
+
+def extractUdidFromCrashFile(crash_path,framework):
+	regex = "0x.* - 0x[0-9abcdef]* (" + framework + ") (.*)  <(.*)>"
+	with open(crash_path) as f:
+		text = f.read()
+		p = re.compile(regex)
+		results = p.findall(text)
+		if len(results) > 0:
+			if len(results[0]) > 1:
+				arch = results[0][1]
+				udid = results[0][2]
+				return (arch,udid)
+	return None
+
+fileTuple = findFiles(rootdir)
+
+# udidPair = extractUdidFromCrashFile(fileTuple[2][0],"scs")
+
+#Run script		
+def executeSymbolication():
+	fileTuple = findFiles(rootdir)
+	frameworks = findFrameworks(fileTuple[0])
+	framework_dict = frameworksDictionary(frameworks)
+	crash_paths = fileTuple[2]
+	for crash_path in crash_paths:
+		parseCrashFile(crash_path,framework_dict)
+
+executeSymbolication()
+
+
+
