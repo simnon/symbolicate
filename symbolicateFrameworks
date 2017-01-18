@@ -147,8 +147,6 @@ def udidsForFramework(framework_binary_path):
 				udidsByArchitecture[result[1]] = result[0].replace("-","").lower()
 	return udidsByArchitecture
 
-frameworkUdids = udidsForFramework("SyncDrive.app/Frameworks/scs.framework")
-
 
 def extractUdidFromCrashFileWithDict(crash_path,framework_dict):
 	udids_dict = {}
