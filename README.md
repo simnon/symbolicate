@@ -6,6 +6,9 @@
 - run sh setup.sh
 - enter sudo details
 
+If you place Xcode.app in a different location, or its saved with a different name, you can set enviornment variable in bash_profile 
+```export DEVELOPER_DIR="/Path/to/Xcode.app/Contents/Developer/"```
+
 ### Use
 
 - Put Application.app, Application.dsym and crash report / reports in same folder. (if multiple .app and .dsyms it might not work)
@@ -17,3 +20,6 @@
 - from terminal type symbolicateFrameworks
 
 They should just work. But if it says UDID for not found then the framework in the app doesn't match the framework in the crash report. Possibly copy the Debug.app or Release.app and try again.
+
+
+
