@@ -12,7 +12,8 @@ atos_enabled = True
 
 def getEnv():
 	my_env = os.environ.copy()
-	my_env["DEVELOPER_DIR"] = "/Applications/Xcode.app/Contents/Developer"
+	if my_env["DEVELOPER_DIR"] == None:
+		my_env["DEVELOPER_DIR"] = "/Applications/Xcode.app/Contents/Developer"
 	return my_env
 
 def findFiles(path):
